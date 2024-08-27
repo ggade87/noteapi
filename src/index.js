@@ -1,6 +1,7 @@
 //https://www.mongodb.com/docs/drivers/node/current/
 import express from "express";
 import cors from "cors";
+import jwt from "jsonwebtoken";
 var app = express();
 const PORT = 8080;
 app.use(cors());
@@ -20,9 +21,28 @@ app.use(json({ limit: "50mb" }));
 var url = "mongodb://localhost:27017/notebook";
 import { MongoClient } from "mongodb";
 import mongodb from "mongodb";
+import sgMail from "@sendgrid/mail";
+sgMail.setApiKey(
+  "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"
+);
 
 const { ObjectId } = mongodb;
-import { ServiceErrorResponse, ServiceResponse } from "./Common.js";
+import {
+  ServiceErrorResponse,
+  ServiceResponse,
+  ServiceResponseOK,
+} from "./Common.js";
+
+import nodemailer from "nodemailer";
+import sendgridTransport from "nodemailer-sendgrid-transport";
+const transport = nodemailer.createTransport(
+  sendgridTransport({
+    auth: {
+      api_key:
+        "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",
+    },
+  })
+);
 
 app.get("/", async function (req, res) {
   const query = { email: "aa@gmail.com" };
@@ -32,6 +52,38 @@ app.get("/", async function (req, res) {
   const User = await Users.findOne(query, options);
   res.send(User);
 });
+const generateToken = (payload) => {
+  const secretKey = "yourSecretKey"; // Replace with your own secret key
+  const options = {
+    expiresIn: "1h", // Token expiration time
+  };
+
+  const token = jwt.sign(payload, secretKey, options);
+  return token;
+};
+
+const validateToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader) {
+    const token = authHeader.split(" ")[1]; // Bearer <token>
+    jwt.verify(token, "yourSecretKey", (err, payload) => {
+      if (err) {
+        return res.status(403).json({
+          success: false,
+          message: "Invalid token",
+        });
+      } else {
+        // req.user = payload;
+        next();
+      }
+    });
+  } else {
+    res.status(401).json({
+      success: false,
+      message: "Token is not provided",
+    });
+  }
+};
 
 app.post("/login", jsonParser, async function (req, res) {
   const client = new MongoClient(url);
@@ -47,7 +99,8 @@ app.post("/login", jsonParser, async function (req, res) {
     if (User == null) {
       res.status(401).send(ServiceErrorResponse("Unatherized user"));
     } else {
-      res.send(User);
+      let token = generateToken(User);
+      res.send(ServiceResponseOK({ User: User, token: token }));
     }
   } finally {
     await client.close();
@@ -68,6 +121,7 @@ app.post("/signup", jsonParser, async function (req, res) {
       password: password,
       Mobile: "",
       profession: "",
+      active: false,
     };
     const query = { email: username };
     const options = {
@@ -107,6 +161,31 @@ app.post("/create/otp", jsonParser, async function (req, res) {
       res.send(ServiceErrorResponse("Unable to save"));
     } else {
       res.send(result);
+      // transport
+      //   .sendMail({
+      //     to: username,
+      //     from: "ggadekar7@gmail.com",
+      //     subject: "Note api sign up otp validation",
+      //     html: "<h1> Your OT is </h1>" + otp,
+      //   })
+      //   .then((res) => {
+      //     res.send(result);
+      //   })
+      //   .catch((err) => {
+      //     console.log(err);
+      //     res.send(err);
+      //   });
+      // sgMail
+      //   .send({secure: false,
+      //     to: username,
+      //     from: "ggadekar7@gmail.com",
+      //     subject: "Note api sign up otp validation",
+      //     html: "<h1> Your OT is </h1>" + otp,
+      //   })
+      //   .then((error) => {
+      //     console.error(error);
+      //     res.send(err);
+      //   });
     }
   } finally {
     await client.close();
@@ -139,8 +218,10 @@ app.post("/validate/otp", jsonParser, async function (req, res) {
       console.log(minutes);
       if (minutes > 10) {
         res.send(ServiceResponse("Otp expired"));
+        console.log("Otp expired");
       } else {
         res.send(ServiceResponse("Valid Otp"));
+        console.log("Valid Otp");
       }
     }
   } finally {
@@ -162,7 +243,7 @@ app.get("/getuserinfo", jsonParser, async function (req, res) {
     if (result == null) {
       res.send(ServiceErrorResponse("User not found"));
     } else {
-      res.send(result);
+      res.send(ServiceResponseOK(result));
     }
   } finally {
     await client.close();
@@ -188,7 +269,7 @@ app.get("/get/mainmenu", jsonParser, async function (req, res) {
     if (response.length == 0) {
       res.send(ServiceErrorResponse("Menu not found"));
     } else {
-      res.send(response);
+      res.send(ServiceResponseOK(response));
     }
   } catch (err) {
     console.log("Catttttttt" + err);
@@ -244,7 +325,7 @@ app.get("/get/content", jsonParser, async function (req, res) {
     if (response.length == 0) {
       res.send(ServiceErrorResponse("Content not found"));
     } else {
-      res.send(response);
+      res.send(ServiceResponseOK(response));
     }
   } catch (err) {
     console.log("Catttttttt" + err);
@@ -266,11 +347,8 @@ app.put("/update/userinfo/:id", jsonParser, async function (req, res) {
       var query = { _id: objectId };
       const updateDocument = {
         $set: {
-          userId: userId,
           image: image,
           name: name,
-          email: email,
-          //password: password,
           Mobile: Mobile,
           profession: profession,
         },
@@ -285,13 +363,13 @@ app.put("/update/userinfo/:id", jsonParser, async function (req, res) {
         res.send(ServiceErrorResponse("Users not found"));
       } else {
         var items = await Users.updateOne(query, updateDocument);
-        res.send(items);
+        res.send(ServiceResponseOK(items));
       }
     } else {
       res.send(ServiceErrorResponse("Invalid id"));
     }
   } catch (err) {
-    console.log("Catttttttt" + err);
+    console.log("err" + err);
   } finally {
     await client.close();
   }
@@ -341,9 +419,8 @@ app.put("/update/mainmenu/:id", jsonParser, async function (req, res) {
   try {
     const database = client.db("notebook");
     const mainMenu = database.collection("mainMenu");
-    var { name } = req.body;
+    var { name, userId } = req.body;
     var { id } = req.params;
-
     if (ObjectId.isValid(id)) {
       var objectId = new ObjectId(id);
       var query = { _id: objectId };
@@ -354,21 +431,29 @@ app.put("/update/mainmenu/:id", jsonParser, async function (req, res) {
       };
       const options = {
         sort: {},
-        //projection: { _id: 1, userId: 1, name: 1 },
+        // projection: { _id: 1, userId: 1, name: 1 },
       };
       var result = await mainMenu.findOne(query, options);
-      console.log(result);
       if (result == null) {
         res.send(ServiceErrorResponse("MainMenu not found"));
       } else {
         var items = await mainMenu.updateOne(query, updateDocument);
-        res.send(items);
+        if (items?.acknowledged) {
+          const resPonse = ServiceResponseOK({
+            _id: id,
+            userId: userId,
+            name: name,
+          });
+          res.send(resPonse);
+        } else {
+          res.send(ServiceErrorResponse("Error in update"));
+        }
       }
     } else {
       res.send(ServiceErrorResponse("Invalid id"));
     }
   } catch (err) {
-    console.log("Catttttttt" + err);
+    console.log("Err" + err);
   } finally {
     await client.close();
   }
@@ -379,7 +464,7 @@ app.put("/update/submenu/:id", jsonParser, async function (req, res) {
   try {
     const database = client.db("notebook");
     const SubMenu = database.collection("SubMenu");
-    var { name } = req.body;
+    var { name, mid } = req.body;
     var { id } = req.params;
 
     if (ObjectId.isValid(id)) {
@@ -400,7 +485,16 @@ app.put("/update/submenu/:id", jsonParser, async function (req, res) {
         res.send(ServiceErrorResponse("SubMenu not found"));
       } else {
         var items = await SubMenu.updateOne(query, updateDocument);
-        res.send(items);
+        if (items?.acknowledged) {
+          const resPonse = ServiceResponseOK({
+            _id: id,
+            mid: mid,
+            name: name,
+          });
+          res.send(resPonse);
+        } else {
+          res.send(ServiceErrorResponse("Error in update"));
+        }
       }
     } else {
       res.send(ServiceErrorResponse("Invalid id"));
@@ -417,7 +511,7 @@ app.put("/update/content/:id", jsonParser, async function (req, res) {
   try {
     const database = client.db("notebook");
     const Content = database.collection("Content");
-    var { name, value } = req.body;
+    var { name, value, smid } = req.body;
     var { id } = req.params;
 
     if (ObjectId.isValid(id)) {
@@ -439,7 +533,13 @@ app.put("/update/content/:id", jsonParser, async function (req, res) {
         res.send(ServiceErrorResponse("Content not found"));
       } else {
         var items = await Content.updateOne(query, updateDocument);
-        res.send(items);
+        const response = ServiceResponseOK({
+          _id: id,
+          smid: smid,
+          name: name,
+          value: value,
+        });
+        res.send(response);
       }
     } else {
       res.send(ServiceErrorResponse("Invalid id"));
@@ -462,10 +562,156 @@ app.post("/create/mainmenu", jsonParser, async function (req, res) {
     if (result == null) {
       res.send(ServiceErrorResponse("Menu not cretaed"));
     } else {
-      res.send(result);
+      res.send(
+        ServiceResponseOK({
+          _id: result.insertedId,
+          userId: userId,
+          name: name,
+        })
+      );
     }
   } catch (err) {
-    console.log("Catttttttt" + err);
+    console.log("Error" + err);
+  } finally {
+    await client.close();
+  }
+});
+
+app.post("/create/submenu", jsonParser, async function (req, res) {
+  const client = new MongoClient(url);
+  try {
+    const database = client.db("notebook");
+    const SubMenu = database.collection("SubMenu");
+    var { mid, name } = req.body;
+    const menu = { mid: mid, name: name };
+    var result = await SubMenu.insertOne(menu);
+    if (result == null) {
+      res.send(ServiceErrorResponse("SubMenu not cretaed"));
+    } else {
+      res.send(
+        ServiceResponseOK({
+          _id: result.insertedId,
+          mid: mid,
+          name: name,
+        })
+      );
+    }
+  } catch (err) {
+    console.log("err" + err);
+  } finally {
+    await client.close();
+  }
+});
+
+app.post("/create/content", jsonParser, async function (req, res) {
+  const client = new MongoClient(url);
+  try {
+    const database = client.db("notebook");
+    const Content = database.collection("Content");
+    var { smid, name, value } = req.body;
+    const menu = { smid: smid, name: name, value: value };
+    var result = await Content.insertOne(menu);
+    if (result == null) {
+      res.send(ServiceErrorResponse("Content not cretaed"));
+    } else {
+      res.send(
+        ServiceResponseOK({
+          _id: result.insertedId,
+          smid: smid,
+          name: name,
+          value: value,
+        })
+      );
+    }
+  } catch (err) {
+    console.log("err" + err);
+  } finally {
+    await client.close();
+  }
+});
+
+app.delete("/delete/mainmenu", jsonParser, async function (req, res) {
+  const client = new MongoClient(url);
+  try {
+    const database = client.db("notebook");
+    const mainMenu = database.collection("mainMenu");
+    var { id } = req.query;
+    if (ObjectId.isValid(id)) {
+      var objectId = new ObjectId(id);
+      var query = { _id: objectId };
+      var result = await mainMenu.deleteOne(query);
+      if (result == null) {
+        res.send(ServiceErrorResponse("mainmenu not found"));
+      } else {
+        if (result?.acknowledged) {
+          res.send(ServiceResponseOK(objectId));
+        } else {
+          res.send(ServiceErrorResponse("mainmenu not found"));
+        }
+      }
+    } else {
+      res.send(ServiceErrorResponse("Invalid id"));
+    }
+  } catch (err) {
+    console.log("err" + err);
+  } finally {
+    await client.close();
+  }
+});
+
+app.delete("/delete/submenu", jsonParser, async function (req, res) {
+  const client = new MongoClient(url);
+  try {
+    const database = client.db("notebook");
+    const SubMenu = database.collection("SubMenu");
+    var { id } = req.query;
+    if (ObjectId.isValid(id)) {
+      var objectId = new ObjectId(id);
+      var query = { _id: objectId };
+      var result = await SubMenu.deleteOne(query);
+      if (result == null) {
+        res.send(ServiceErrorResponse("SubMenu not found"));
+      } else {
+        if (result?.acknowledged) {
+          res.send(ServiceResponseOK(objectId));
+        } else {
+          res.send(ServiceErrorResponse("mainmenu not found"));
+        }
+      }
+    } else {
+      res.send(ServiceErrorResponse("Invalid id"));
+    }
+  } catch (err) {
+    console.log("err" + err);
+  } finally {
+    await client.close();
+  }
+});
+
+app.delete("/delete/content", jsonParser, async function (req, res) {
+  const client = new MongoClient(url);
+  try {
+    const database = client.db("notebook");
+    const Content = database.collection("Content");
+    var { id } = req.query;
+    if (ObjectId.isValid(id)) {
+      var objectId = new ObjectId(id);
+      var query = { _id: objectId };
+      var result = await Content.deleteOne(query);
+      if (result == null) {
+        res.send(ServiceErrorResponse("Content not found"));
+      } else {
+        if (result?.acknowledged) {
+          res.send(ServiceResponseOK(objectId));
+        } else {
+          res.send(ServiceErrorResponse("content not found"));
+        }
+      }
+    } else {
+      res.send(ServiceErrorResponse("Invalid id"));
+    }
+  } catch (err) {
+    console.log("err" + err);
   } finally {
     await client.close();
   }

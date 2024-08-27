@@ -4,3 +4,7 @@ export const ServiceErrorResponse = (messase) => {
 export const ServiceResponse = (messase) => {
   return { Message: messase, Success: true };
 };
+
+export const ServiceResponseOK = (response) => {
+  return { Data: response, Success: true };
+};
